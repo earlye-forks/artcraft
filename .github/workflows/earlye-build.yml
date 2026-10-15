@@ -1,0 +1,228 @@
+# Fork-local build workflow for the earlye fork of ArtCraft.
+#
+# Upstream does not have this file, so it survives rebases onto upstream
+# without conflicts. It builds UNSIGNED artifacts for testing only.
+#
+# It is standalone rather than reusing artcraft-macos-publish.yml or
+# artcraft-windows-publish.yml because those workflows need Apple
+# signing/notarization secrets, run on the paid macos-latest-xlarge runner,
+# and create draft GitHub releases via tauri-action.
+name: Earlye build
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - release
+      - artcraft-release
+      - artcraft-macos
+      - artcraft-windows
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to build (Linux is only built on request)
+        type: choice
+        default: macos+windows
+        options:
+          - macos+windows
+          - macos
+          - windows
+          - linux
+          - all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: earlye-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  choose:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Choose platforms
+        id: matrix
+        shell: bash
+        env:
+          # Empty on push events, which build macos+windows.
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          macos='{"os":"macos-latest","label":"macos-arm64","target":"aarch64-apple-darwin","bundles":"app,dmg"}'
+          windows='{"os":"windows-latest","label":"windows-x64","target":"","bundles":"nsis"}'
+          linux='{"os":"ubuntu-22.04","label":"linux-x64","target":"","bundles":"deb,appimage"}'
+          case "${PLATFORM:-macos+windows}" in
+            macos+windows) include="[$macos,$windows]" ;;
+            macos) include="[$macos]" ;;
+            windows) include="[$windows]" ;;
+            linux) include="[$linux]" ;;
+            all) include="[$macos,$windows,$linux]" ;;
+            *) echo "::error::Unknown platform: $PLATFORM"; exit 1 ;;
+          esac
+          echo "matrix=$include" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: choose
+    name: build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.choose.outputs.matrix) }}
+    env:
+      # Bundles land under the workspace-root target/ (no target-dir override).
+      # Builds with an explicit --target add a <target>/ path segment.
+      BUNDLE_DIR: ${{ matrix.target != '' && format('target/{0}/release/bundle', matrix.target) || 'target/release/bundle' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        id: rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target"
+          key: ${{ matrix.label }}
+
+      - name: Install wreq dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: choco install cmake strawberryperl pkgconfiglite llvm nasm -y
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf cmake clang perl pkg-config
+
+      - name: Compute build names
+        id: names
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA::7}"
+          safe_ref="$(printf '%s' "$REF_NAME" | sed 's/[^A-Za-z0-9._-]/-/g')"
+          {
+            echo "short_sha=$short_sha"
+            echo "safe_ref=$safe_ref"
+            echo "artifact=ArtCraft-$safe_ref-$short_sha-$LABEL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install frontend dependencies
+        shell: bash
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        shell: bash
+        working-directory: frontend
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          VITE_ENVIRONMENT_TYPE: production
+        run: npx nx run artcraft:build
+
+      - name: Install tauri-cli
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: tauri-cli@2.10.0
+
+      - name: Build Tauri app
+        shell: bash
+        working-directory: crates/desktop/artcraft
+        env:
+          SQLX_OFFLINE: true
+          # Needed by wreq on Windows (mirrors artcraft-windows-publish.yml).
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
+          TARGET: ${{ matrix.target }}
+          BUNDLES: ${{ matrix.bundles }}
+        run: |
+          set -euo pipefail
+          target_args=()
+          if [ -n "$TARGET" ]; then
+            target_args=(--target "$TARGET")
+          fi
+          # The frontend was built above, so skip Tauri's beforeBuildCommand.
+          cargo tauri build "${target_args[@]}" --bundles "$BUNDLES" \
+            --config '{"build":{"beforeBuildCommand":""}}'
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          case "$RUNNER_OS" in
+            macOS)
+              ditto -c -k --keepParent "$BUNDLE_DIR/macos/ArtCraft.app" dist/ArtCraft.app.zip
+              cp "$BUNDLE_DIR"/dmg/*.dmg dist/
+              ;;
+            Windows)
+              cp "$BUNDLE_DIR"/nsis/*.exe dist/
+              ;;
+            Linux)
+              cp "$BUNDLE_DIR"/deb/*.deb "$BUNDLE_DIR"/appimage/*.AppImage dist/
+              ;;
+          esac
+          ls -la dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.artifact }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Write job summary
+        if: always()
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          LABEL: ${{ matrix.label }}
+          TARGET: ${{ matrix.target }}
+          ARTIFACT: ${{ steps.names.outputs.artifact }}
+          CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: |
+          {
+            echo "## ArtCraft unsigned build ($LABEL)"
+            echo
+            echo "| Field          | Value |"
+            echo "|----------------|-------|"
+            echo "| Branch         | \`$REF_NAME\` |"
+            echo "| Commit         | \`$GITHUB_SHA\` |"
+            echo "| Runner         | \`$RUNNER_OS / $RUNNER_ARCH ($ImageOS)\` |"
+            echo "| Target         | \`${TARGET:-host default}\` |"
+            echo "| Artifact       | \`$ARTIFACT\` |"
+            echo "| Rust cache hit | \`${CACHE_HIT:-false}\` |"
+            echo
+            case "$RUNNER_OS" in
+              macOS)
+                echo "The app is unsigned. After copying it to /Applications, clear the quarantine flag:"
+                echo
+                echo '```sh'
+                echo 'xattr -dr com.apple.quarantine /Applications/ArtCraft.app'
+                echo '```'
+                ;;
+              Windows)
+                echo "The installer is unsigned, so Windows SmartScreen will warn before running it"
+                echo "(choose **More info** then **Run anyway**)."
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
