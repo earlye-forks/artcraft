@@ -159,7 +159,7 @@ export const MainApp = ({ sceneToken }: Props) => {
     });
   }, []);
 
-  const { triggerRecheck } = useLoginModalStore();
+  const { openModal: openLoginModal } = useLoginModalStore();
   const { isOpen: isCreditsOpen, closeModal: closeCreditsModal } =
     useCreditsModalStore();
   const disableHotkeyInput = usePageSceneStore((s) => s.disableHotkeyInput);
@@ -172,7 +172,7 @@ export const MainApp = ({ sceneToken }: Props) => {
       <TopBar
         loginSignUpPressed={() => {
           console.log("PRESSED");
-          triggerRecheck();
+          openLoginModal();
         }}
         pageName="Edit Scene"
       />

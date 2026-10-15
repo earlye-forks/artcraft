@@ -23,6 +23,9 @@ https://github.com/user-attachments/assets/7339bd09-3e0d-44a7-a024-af9de64e4c11
   <a href="./_docs/dev_setup.md">Build from source</a>
 </p>
 
+> [!NOTE]
+> This repository is a fork of [storytold/artcraft](https://github.com/storytold/artcraft). It carries a small set of fork-local changes applied on top of upstream, tracked as prompts rather than as a diverging code history. For how this fork differs from upstream, see [`earlye-fork.md`](./earlye-fork.md).
+
 ArtCraft is the IDE for interactive AI image and video creation. Compose in 2D, stage scenes in 3D, and choose the models that fit your work. Turn prompting into *crafting* with visual tools for precise, repeatable results.
 
 ## Show, Don't Tell: Advanced Crafting Features

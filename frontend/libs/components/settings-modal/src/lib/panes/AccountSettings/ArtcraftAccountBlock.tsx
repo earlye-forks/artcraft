@@ -16,7 +16,7 @@ export interface ArtcraftAccountBlockProps {
 export const ArtcraftAccountBlock = ({
   globalAccountLogoutCallback,
 }: ArtcraftAccountBlockProps) => {
-  const { triggerRecheck } = useLoginModalStore();
+  const { triggerRecheck, openModal } = useLoginModalStore();
   const [artcraftSession, setArtcraftSession] = useState<UserInfo | undefined>(
     undefined
   );
@@ -54,12 +54,12 @@ export const ArtcraftAccountBlock = ({
       globalAccountLogoutCallback(); // TODO: This resets the old global application state
 
 
-      triggerRecheck(); // Trigger modal to recheck session and potentially open
+      triggerRecheck(); // Recheck the session; the login modal stays closed
 
       await invoke("storyteller_purge_credentials_command");
 
     } else {
-      triggerRecheck(); // Open login modal instead of redirecting
+      openModal(); // Open login modal instead of redirecting
     }
   };
 
