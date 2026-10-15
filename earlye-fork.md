@@ -8,3 +8,5 @@ prompt history for the prompts themselves.
 ## Differences from upstream
 
 - `feature-000` — adds this file and the fork notice in `README.md`.
+- `feature-001` — the login modal no longer opens automatically at startup and can be
+  dismissed; features that need an ArtCraft account still prompt for login.

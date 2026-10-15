@@ -1,7 +1,7 @@
 import { Button } from "@storyteller/ui-button";
 import { Transition, TransitionChild } from "@headlessui/react";
-import { useState, useEffect, useRef } from "react";
-import { ArrowRightIcon } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { ArrowRightIcon, XIcon } from "lucide-react";
 import { DiscordIcon } from "@storyteller/icons";
 import type { UserInfo } from "@storyteller/api";
 import { DesktopLoginBridge } from "./DesktopLoginBridge";
@@ -57,7 +57,9 @@ export function LoginModal({
   const afterClose = useRef(onClose);
   afterClose.current = onClose;
 
-  // A stale startup/recheck response must never reopen the modal after login.
+  // Picks up an existing session at startup/recheck. A missing session does not
+  // open the modal; it only opens on explicit requests (openModal). A stale
+  // response must never reopen the modal after login.
   useEffect(() => {
     const generation = ++authGeneration.current;
     let active = true;
@@ -75,12 +77,10 @@ export function LoginModal({
         setShowSuccess(false);
         setLoggedInUsername(null);
         setIsLoggedInArtCraft(false);
-        useLoginModalStore.getState().openModal();
       }
     }).catch((error) => {
       if (!active || generation !== authGeneration.current) return;
       setErrorMessage(isDesktopLoginError(error) ? error.message : "Unable to check your account. Please sign in again.");
-      useLoginModalStore.getState().openModal();
     });
     return () => { active = false; };
   }, [recheckTrigger, closeModal, initialIsSignUp]);
@@ -98,10 +98,19 @@ export function LoginModal({
     return () => window.clearTimeout(timer);
   }, [loggedInUsername, isOpen, closeModal]);
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     closeModal();
-    onClose?.();
-  };
+    afterClose.current?.();
+  }, [closeModal]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, handleClose]);
 
   const handleDiscordJoin = () => {
     window.open("https://discord.gg/75svZP2Vje", "_blank");
@@ -219,7 +228,10 @@ export function LoginModal({
         >
           <div className="fixed inset-0 cursor-pointer bg-black/80" />
         </TransitionChild>
-        <div className="fixed inset-0 flex items-center justify-center p-4">
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4"
+          onClick={handleClose}
+        >
           <TransitionChild
             enter="ease-out duration-300"
             enterFrom="opacity-0 scale-95"
@@ -232,6 +244,14 @@ export function LoginModal({
               className={`relative w-full ${loggedInUsername !== null ? "max-w-md" : "max-w-lg lg:max-w-5xl"}`}
               onClick={(e) => e.stopPropagation()}
             >
+              <button
+                type="button"
+                onClick={handleClose}
+                aria-label="Close"
+                className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-[3px] text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <XIcon className="h-4 w-4" />
+              </button>
               <div
                 className={`relative flex w-full overflow-hidden border border-white/20 bg-[#1e1f22] text-white ${loggedInUsername !== null ? "" : "lg:min-h-[560px]"}`}
               >
@@ -241,7 +261,7 @@ export function LoginModal({
                   renderOnboarding()
                 ) : (
                   <>
-                    {/* ── Form pane ── (no dismiss control — login is required) */}
+                    {/* ── Form pane ── */}
                     <div className="relative flex w-full flex-col lg:w-1/2">
                       <div className="flex flex-1 flex-col justify-center px-6 py-10 sm:px-10 sm:py-12">
                         <div className="w-full">
@@ -284,6 +304,15 @@ export function LoginModal({
                             errorMessage={errorMessage}
                             isLoading={isLoading}
                           />}
+                          <div className="mt-6 text-center">
+                            <button
+                              type="button"
+                              onClick={handleClose}
+                              className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-white/50 transition-colors hover:text-white"
+                            >
+                              Continue without an account
+                            </button>
+                          </div>
                         </div>
                       </div>
 

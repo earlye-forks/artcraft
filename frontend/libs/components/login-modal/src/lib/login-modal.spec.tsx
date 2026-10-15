@@ -180,3 +180,52 @@ describe("native login modal integration", () => {
     expect(screen.queryByRole("heading", { name: "Logged in as google_user" })).toBeNull();
   });
 });
+
+describe("optional login", () => {
+  beforeEach(() => { useLoginModalStore.setState({ isOpen: false, recheckTrigger: 0 }); });
+
+  it.each([
+    ["no session", async () => null],
+    ["a failed session check", async () => { throw new Error("offline"); }],
+  ])("does not open the modal at startup with %s", async (_label, session) => {
+    native.mockImplementationOnce(session);
+    const success = vi.fn();
+    await act(async () => { render(<LoginModal onArtCraftAuthSuccess={success} />); });
+    expect(native).toHaveBeenCalledWith("storyteller_get_login_session_command");
+    expect(useLoginModalStore.getState().isOpen).toBe(false);
+    expect(screen.queryByText("Create your account")).toBeNull();
+    expect(success).not.toHaveBeenCalled();
+    await act(async () => { useLoginModalStore.getState().triggerRecheck(); });
+    expect(useLoginModalStore.getState().isOpen).toBe(false);
+  });
+
+  it("opens on an explicit request", async () => {
+    await act(async () => { render(<LoginModal />); });
+    await act(async () => { useLoginModalStore.getState().openModal(); });
+    expect(screen.getByText("Create your account")).toBeTruthy();
+  });
+
+  it.each([
+    ["the close button", () => fireEvent.click(screen.getByRole("button", { name: "Close" }))],
+    ["continue without an account", () => fireEvent.click(screen.getByRole("button", { name: "Continue without an account" }))],
+    ["Escape", () => fireEvent.keyDown(window, { key: "Escape" })],
+    ["a backdrop click", () => fireEvent.click(screen.getByText("Create your account").closest(".fixed.inset-0.flex")!)],
+  ])("dismisses via %s", async (_label, dismiss) => {
+    const onClose = vi.fn();
+    await act(async () => { render(<LoginModal onClose={onClose} />); });
+    await act(async () => { useLoginModalStore.getState().openModal(); });
+    await act(async () => { dismiss(); });
+    expect(useLoginModalStore.getState().isOpen).toBe(false);
+    expect(screen.queryByText("Create your account")).toBeNull();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open on clicks inside the card", async () => {
+    const onClose = vi.fn();
+    await act(async () => { render(<LoginModal onClose={onClose} />); });
+    await act(async () => { useLoginModalStore.getState().openModal(); });
+    fireEvent.click(screen.getByText("Create your account"));
+    expect(useLoginModalStore.getState().isOpen).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
